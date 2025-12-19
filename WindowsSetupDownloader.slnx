@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="WindowsSetupDownloader/WindowsSetupDownloader.csproj" />
+  <Project Path="WindowsSetupDownloaderConsole/WindowsSetupDownloaderConsole.csproj" Id="99be7736-2957-482d-9a71-2212203f4f1e" />
+</Solution>
