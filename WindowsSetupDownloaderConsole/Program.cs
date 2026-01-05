@@ -60,6 +60,7 @@ namespace WindowsSetupDownloaderConsole
         private static string selectedVersion;
         private static List<string> buildsVonVersion;
         private static string selectedBuildVonVersion;
+        private static string selectedUUID;
 
         private static int currentDownloadedFile;
         private static ushort countTooManyRequests;
@@ -79,7 +80,7 @@ namespace WindowsSetupDownloaderConsole
             countTooManyRequests = 0;
             bool chosen = false;
             lockObject = new object();
-
+            selectedUUID = string.Empty;
 
             do
             {
@@ -96,6 +97,83 @@ namespace WindowsSetupDownloaderConsole
             await GetFileList();
             await UnpackUUPConverter();
             await RunConverter();
+        }
+
+        private static async Task AfterSetup()
+        {
+            short continuation = -1;
+            do
+            {
+                Console.Clear();
+
+                Console.WriteLine("=============================================");
+                Console.WriteLine("===============Setup beendet=================");
+                Console.WriteLine("=============================================");
+                Console.WriteLine(Environment.NewLine);
+
+                Console.WriteLine("Der Setup-Prozess wurde abgebrochen.");
+                Console.WriteLine(Environment.NewLine);
+
+                Console.WriteLine("1 => Setup neu starten");
+                Console.WriteLine("2 => Den Rechner herunterfahren");
+                Console.WriteLine("3 => Den Rechner neu starten");
+
+                Console.WriteLine(Environment.NewLine);
+                Console.Write("Wie möchtest du fortfahren? ");
+
+                var eingabe = Console.ReadLine();
+
+                short pEingabe = -1;
+                short.TryParse(eingabe, out pEingabe);
+
+                if (pEingabe > 0 && pEingabe < 4)
+                    continuation = pEingabe;
+            } while (continuation < 1);
+
+            var p = new Process();
+            p.StartInfo = new ProcessStartInfo()
+            {
+                CreateNoWindow = true,
+                FileName = "cmd.exe",
+                UseShellExecute = false
+            };
+
+            if (continuation == 1)
+                await RunSetup();
+            else if (continuation == 2)
+                p.StartInfo.Arguments = " /c shutdown.exe -s -t 5";
+            else if (continuation == 3)
+                p.StartInfo.Arguments = " /c shutdown.exe -r -t 5";
+            else
+                await AfterSetup();
+
+            p.Start();
+            Console.Clear();
+            Console.WriteLine("Das System wird heruntergefahren.");
+            Thread.Sleep(4000);
+            Environment.Exit(0);
+        }
+
+        private static async Task RunSetup()
+        {
+            var dirList = Directory.GetDirectories("T:\\");
+            foreach (var dir in dirList)
+            {
+                if (dir.ToLower().Contains("release"))
+                {
+                    var path = Path.Combine("T:", dir, "setup.exe");
+                    if (File.Exists(path))
+                    {
+                        using (var setupProcess = new Process())
+                        {
+                            setupProcess.StartInfo.FileName = path;
+                            setupProcess.Start();
+                            await setupProcess.WaitForExitAsync();
+                            await AfterSetup();
+                        }
+                    }
+                }
+            }
         }
 
         private static async Task RunConverter()
@@ -154,22 +232,7 @@ namespace WindowsSetupDownloaderConsole
 
                 await p.WaitForExitAsync();
 
-                var dirList = Directory.GetDirectories("T:\\");
-                foreach (var dir in dirList)
-                {
-                    if (dir.ToLower().Contains("release"))
-                    {
-                        var path = Path.Combine("T:", dir, "setup.exe");
-                        if (File.Exists(path))
-                        {
-                            using (var setupProcess = new Process())
-                            {
-                                setupProcess.StartInfo.FileName = path;
-                                setupProcess.Start();
-                            }
-                        }
-                    }
-                }
+                await RunSetup();
             }
         }
 
@@ -355,6 +418,12 @@ namespace WindowsSetupDownloaderConsole
             var buildList = buildInfos.Where(e => e.Build.Equals(selectedBuildVonVersion) && e.Title.ToLower().Contains(selectedBetriebsystem.ToLower()))
                 .ToList();
 
+            if (!selectedUUID.Equals(string.Empty))
+            {
+                buildList.Clear();
+                buildList.Add(buildInfos.Single(e => e.Uuid.Equals(selectedUUID)));
+            }
+
             var removableBuilds = new List<UupBuildInfo>();
             if (buildList.Count > 1)
             {
@@ -377,10 +446,47 @@ namespace WindowsSetupDownloaderConsole
                 selectedBuildVonVersion = string.Empty;
                 selectedVersion = string.Empty;
                 selectedBuildInfo = null;
+                selectedUUID = string.Empty;
 
                 await Main(Array.Empty<string>());
 
                 return;
+            }
+            else if (buildList.Count > 1)
+            {
+                do
+                {
+                    Console.Clear();
+
+                    Console.WriteLine("=============================================");
+                    Console.WriteLine("===============Commit-Auswahl================");
+                    Console.WriteLine("=============================================");
+                    Console.WriteLine(Environment.NewLine);
+
+                    Console.WriteLine("Es gibt mehrere Commits für deinen gewählten Build:");
+                    Console.WriteLine(Environment.NewLine);
+
+                    for (int i = 0; i < buildList.Count; i++)
+                    {
+                        Console.WriteLine($"{i + 1} => {buildList[i].Title}");
+                    }
+
+                    Console.WriteLine(Environment.NewLine);
+                    Console.Write("Welcher Commit soll heruntergeladen werden? ");
+
+                    var eingabe = Console.ReadLine();
+
+                    int pEingabe = -1;
+                    int.TryParse(eingabe, out pEingabe);
+
+                    if (pEingabe > 0 && pEingabe < buildList.Count + 1)
+                    {
+                        var selectedBuild = buildList[pEingabe - 1];
+
+                        buildList.Clear();
+                        buildList.Add(selectedBuild);
+                    }
+                } while (buildList.Count > 1);
             }
 
             var build = buildList.First();
@@ -397,6 +503,39 @@ namespace WindowsSetupDownloaderConsole
                     try
                     {
                         fileListRawText = await httpClient.GetStringAsync($"https://uupdump.net/get.php?id={build.Uuid}&pack=neutral&edition=app&aria2=2");
+
+                        if (fileListRawText.ToUpper().Contains("UNSUPPORTED_COMBINATION"))
+                        {
+                            Console.WriteLine("Zu dem ausgewählten Build gibt es keine Meta-Informationen.");
+                            Console.Write("Bitte drücke eine Taste, um mit der Selektion neu zu starten.");
+                            Console.ReadLine();
+
+                            selectedBetriebsystem = string.Empty;
+                            selectedBuildVonVersion = string.Empty;
+                            selectedVersion = string.Empty;
+                            selectedBuildInfo = null;
+                            selectedUUID = string.Empty;
+
+                            await Main(Array.Empty<string>());
+
+                            return;
+                        }
+                        else if (fileListRawText.ToUpper().Contains("UNSUPPORTED_LANG"))
+                        {
+                            Console.WriteLine("Zu dem ausgewählten Build gibt es keine Sprach-Informationen.");
+                            Console.Write("Bitte drücke eine Taste, um mit der Selektion neu zu starten.");
+                            Console.ReadLine();
+
+                            selectedBetriebsystem = string.Empty;
+                            selectedBuildVonVersion = string.Empty;
+                            selectedVersion = string.Empty;
+                            selectedBuildInfo = null;
+                            selectedUUID = string.Empty;
+
+                            await Main(Array.Empty<string>());
+
+                            return;
+                        }
                     }
                     catch (Exception e)
                     {
@@ -523,6 +662,7 @@ namespace WindowsSetupDownloaderConsole
                 selectedVersion = latestBuild.Title.Substring(latestBuild.Title.ToLower().IndexOf("version") + 8,
                     latestBuild.Title.IndexOf('(') - latestBuild.Title.ToLower().IndexOf("version") - 9);
                 selectedBuildVonVersion = latestBuild.Build;
+                selectedUUID = latestBuild.Uuid;
             }
         }
 
